@@ -1,0 +1,593 @@
+INTRODUCTION
+
+    Developed a set of loadable modules,each with different set of functionalities
+    .e.g.tracing, protection and antivirus. These modules hijack the system call table 
+    to enhance some existing functionalties by performing various useful operations like 
+    tracing, protection and virus check. Processes can be registered with any one of these 
+    modules and thus would get the functionalities of that module.Suppose a process registers
+    for antivirus module, so the process would get an overriden open system call which first
+    checks if the file to be opened is a virus or not along with the existing open 
+    functionality.If not a virus,only then would it call the original open system call.
+
+
+FILES ADDED/ MODIFIED
+
+        - HW3/Makefile -  This file is used to build all the loadable modules.
+
+        - HW3/loadmod.sh - This script is used to make and install all the modules.
+			   It also compiles a number of user programs.
+			   It copies a antivirus blacklist and test file from current 
+			   location to "tmp" folder.
+
+        - HW3/unload.sh - This script is used to remove all the loadable modules.
+
+        - HW3/main.c - This is the main file of driver module. It sets up ioct as a device,
+                       triggers system call table hijacking. Performs registration and
+                       deregistration of submodules.
+
+        - HW3/bitmap.c - This file maintains a linked list of all the modules.
+
+        - HW3/syscall_new.c - This file provides a hook in the system call table and
+                              redirects a call to a specific module.
+
+        - HW3/syscall_intercept.c - It hijacks system call table.
+
+        - HW3/module.h - Defines custom structure used by each of the process. Defines
+                         enum for system calls and modules.
+
+        - HW3/ioctl_device.c - Sets up ioctl as a device, facilitates set ioctl and get
+                               ioctl.
+
+        - HW3/modules/trace_module.c - This file contains the module specific system call
+                                       implementation for tracing module.
+
+        - HW3/modules/anti_module.c -  This file contains the module specific system call
+                                       implementation for antivirus module.
+
+	- HW3/user_ioctl.c - This program issues an ioctl(2) command to register the process
+                             on specific module. It provides both ioctl set and get using 
+			     option arguments. (-s & -g respectively)
+
+        - HW3/test.c - This program contains operation using various system calls, which can
+                       be used in sync with user_ioctl.c to verify the functionality
+
+        - HW3/newclone.c - This is a user program to test the newly added clone system call.
+                           It calls clone2 system call with the required parameter. We can 
+			   use lsmod or ioctl get command to verify that the newly created 
+			   process is using the system vector as specified by the user.
+
+	- HW3/org_clone.c - This is a user program to test the original clone system call with
+			    the support of newly added flag.
+
+        - HW3/sysclone2.c - This file is used to support new clone system call which is used
+			    to set new process's vector as given by the user.
+
+	- HW3/antivirusTest.c - This user program is used to test antivirus module. It tries to
+			       open a file which has virus content. The virus file "antivirus_test.txt"
+			       is placed at location "/tmp/". The "blacklist" file which has all the 
+			       virus patterns is also placed at location "/tmp/". After running the 
+			       user program check dmesg, you will see that the file is found as virus.
+			       This is because by default virus pattern is kept in the file being opened
+			       by this user program. 
+
+	- /include/linux/sched.h - Added structure for system vector, tast_struct updated to contain
+                                   system_vector structure.
+
+        - /include/linux/init_tash.h - INIT_TASK updated to initilize sys_vector to NULL.
+	
+	- /kernel/fork.c - Exported _do_fork function to get PID of child process. Changes made to copy_process
+			   function to handle the new flag added.
+
+	- /fs/open.c - Added a new system call.
+	
+	- include/uapi/linux/sched.h : Added a flag "CLONE_SYSCALL", which will control the clone system call
+				      functionality.
+	- /arch/x86/entry/syscalls/syscall_64.tbl : Added an entry for sys_clone2, the system call number is 329
+
+	- include/linux/syscalls.h: Changes made to add a new system call for clone2.
+
+
+HOW TO COMPILE AND RUN ALL THE PARTS:   (Below given is an e.g. to test clone
+					 and clone2 system calls)
+
+[Note - We have added our Kernel.config to HW3 directory, pleasd use that .config file]
+
+	-Use script loadmod.sh to make and install the modules.
+			sh loadmod.sh
+			
+	-Testing original clone system call: The original clone system call is called with 
+	 an additional flag. The flag defines whether the process would inherit vector 
+	 from parent or would use default vector. If flag is 0: It will inherit from 
+	 parent, otherwise use default vector.
+
+		-Compile user program which calls original clone system call:
+			gcc org_clone.c -o org_clone
+	
+		-Run user program. This user program forks a process and sets its vector 
+		 same as its parent.
+			./org_clone -p
+	
+		-Run user program. This user program forks a process and sets its vector 
+	         as default, which will call the original system calls.
+			./org_clone -d
+	
+	-Testing new clone system call:	Clone2
+	 The new system call clone 2 is needed to set a newly created process with a vector 
+	 id as specified by the user. If a vector id specified is not present then the 
+	 process would inherit the vector from its parent.
+	 
+		-Compile user program which calls new clone system call:
+			gcc newclone.c -o newclone
+			
+		-Run user program. This user program forks a process and sets bitmap and vector 
+		 Id as given by the user
+			./newclone 1023 2
+			
+			This forks a new process and assigns it a bitmap 1023 and vector id 2.
+			(bitmap 1023 means 10 lower bits set to 1)
+	
+	- Use unload.sh to unload all the modules:
+
+
+
+TESTING:
+[NOTE: Before testing any feature, please make sure that the modules are loaded. It can be
+ done by running a script file loadmod.sh, which makes all the modules and installs them
+ Though, we have handled the case when we try to run user programs with no modules loaded.
+ Following user programs also get compiled by the loadmod.sh script:
+	1. gcc call_fork.c -o call_fork
+        2. gcc user_ioctl.c -o user
+	3. gcc newclone.c -o newclone
+	4. gcc org_clone.c -o org_clone
+	5. gcc test.c -o test
+	6. gcc antivirusTest.c -o antivirusTest
+	7. gcc test_protected.c -o test_protected
+]
+
+1. Default syscall vector for all processes, inherted to children:
+	The default syscall vectors for all processes are inherited to children. Even if 
+	we change the syscall vector of a parent which later forks a process, the child 
+	would inherit the parents syscall vector. For all the processes that are forked 
+	using either fork, vfork, clone, the child inherits the parents vector. (The only 
+	exception being original clone which has a flag that would control the child's 
+	system vector). The new clone system call forks a process and assigns it a vector
+	ID as specified by the user.
+
+	 a.Run user program[call_fork.c]:
+	       This is a way to test whether the child rightly inherits the parent's system 
+	       call vector. The user program when executed creates a process (say P1). We 
+	       provide a delay of 40 secs within which we need to set the ioctl for this 
+	       process P1. Lets say we set the vector for this process as V2. After 40 secs 
+	       delay, the user program forks a child process (say P2). Now as per the 
+	       requirement, this process P2 should use vector same as its parent which is 
+	       vector V2. 
+	       [NOTE: In the user program we fork a process using fork system call. The default vector
+		assigned to a child when running clone system call is also its parent vector.
+		But additionally clone has a flag which when set would enforce the child forked
+		to have default system vector and not parent's system vector.]
+	
+	Testing steps:
+	(If modules not loaded, then run "sh loadmod.sh" first)
+
+	- Please open 3 terminals to observe the behavior.
+        - Terminal 1: This terminal is just used to keep a watch on the processes being 
+	  forked and their corresponding PID.
+        - Terminal 2: Here we would run the user program which forks a process.
+        - Terminal 3: Here we would set the ioctl for the newly created process and observe 
+	  the behavior.
+	  
+        a. On terminal 1: Run "top" command to see a list of processes.
+
+        b. On terminal 2: Since the call_fork user program is already compiled,
+			  Run user program call_fork.
+         	                 ./call_fork
+
+        c. On terminal 3: You can see a process created for "call_fork" on terminal 1.
+			  Say it has process ID 12486, then run following command within
+			  40 secs:
+
+				./user -s 12486 1023 1
+
+                          ioctl has following format:
+                          ./user -s <PID> <VECTOR> <VECTOR_ID>
+
+				PID : Process ID,
+        	                VECTOR : system calls to allow, and
+                	        VECTOR_ID : vector table(Module) to use.                         
+ 
+			  In the above e.g. We set the ioctl for process with ID 12486, we 
+			  provide vector as 1023 and make the process use module 1. 1023 
+			  represents a binary with lower 10 bits set to 1. This is to enable 
+			  the 10 system calls that we have supported.
+
+        d. On terminal 3: Do lsmod to see the number of processes that are using module 1(trace 
+			  module). It would change from 1 to 2 after the fork system call 
+			  runs. This means that apart from parent process, the child process
+			  also points to the same module. This proves that both the processes
+			  now use the same module. The program would end 30 secs after the child was
+			  forked, so do lsmod or ./user -g within this duration.
+			  (./user -g is ioctl get to check which modules are being used
+                           by which processes.) 
+
+(Note : This can also be tested using a clone system call. When we call the clone system call
+ with flag as 0, the child inherits the system call vector of its parent, otherwise the child
+ uses a default vector.
+ In fork.c, by default, the parent process's structure is mem copied to child process's structure.
+ So, the child already gets the parent's vector. Thus, forking a process using fork, vfork also makes
+ sure that the child gets parent's vector.)
+	
+2. clone(2) CLONE_SYSCALLS flag support:
+	We have developed a user program which calls the original clone system call. The user
+	program is to be provided with an argument that would be the flag for clone system 
+	call. The flag would decide whether the child would inherit parent's vector table 
+	or would get default vector table.
+	
+	- Testing steps:
+	  - Please open 3 terminals to observe the behavior.
+	
+	  - Terminal 1 : This terminal is just used to keep a watch on the processes being 
+	     		 forked and their corresponding PIDs.
+	  - Terminal 2 : Here we would run the user program which calls the original clone 
+	     		 system call.
+	  - Terminal 3 : Here we would set the ioctl for the created process and observe the behavior.
+
+	
+	 a. On terminal 1 : Run "top" command to see a list of processes.
+	 
+         b. On terminal 2:  Since the org_clone user program is already compiled,
+                            Run user program org_clone with an argument p(to set new flag as 0)
+                            This would make the child proces inherit vector from its parent.
+
+		  		./org_clone -p
+	    	  
+		[Note:- the possible arguments for the org_clone user program is as follows:
+			./org_clone - [-d][-p]
+			  
+			- d : The child process created would have default system
+			      call vector.
+			- p : The child would inherit the syscall vector from its
+			      parent.]
+
+	 c. On terminal 3: You can see a process created for org_clone on terminal 1. Set 
+	    		   ioctl for this process (say it has PID 12486) within 40 secs.
+	
+				./user -s 12486 1023 1
+				
+            In the above e.g., We set the ioctl for process with ID 12486, we provide bitmap as 
+	    1023 and make the process use module(vector ID) 1. 
+	
+         d. On terminal 3: Do lsmod to see the number of processes using module 1(trace module).
+	    		   It would change from 1 to 2 after the clone system call runs. This 
+			   means that apart from parent org_clone process, the child org_clone 
+			   process also uses the same module 1.
+
+	    
+3. un / loadable syscall vectors:
+		All the system vectors are implemented as loadable modules. These modules specify 
+		custom implementations of system calls. One can load the modules as per need. Each
+		of the modules is handled by a driver module. The driver module cannot be removed 
+		unless all of the sub modules are removed. Though, We have handled this case where 
+		someone tries to remove the driver module before removing the submodules.
+		Number of loadable modues supported as vectors:
+		1. Trace Module - VECTOR ID 1
+		2. PROTECT Module - VECTOR ID 2
+		3. ANTIVIRUS Module - VECTOR ID 3
+
+		
+4. ioctl(2) support:change syscall vectors:
+		ioctl is implemented as a device. We can use ioctl set command to set a 
+		system call vector for a process. The command is as follows:
+		
+ 		- SET_IOCTL:
+                        - ./user_ioctl -s PID SYSTEM_VECTOR MODULE_NUMBER
+                        - Set IOCTL assigns process a vector and module number(vector id) 
+			  which dictates the system calls the process is allowed to call 
+			  and from which module.
+
+        	- PARAMETERS
+
+          	- [-s] -> To SET_IOCTL
+          	- [-g] -> To GET_IOCTL
+          	- PID -> Process ID
+          	- SYSTEM_VECTOR -> Bitmap dictating the syscall permissions
+
+                	- SYS_OPEN -   Bit 0
+                	- SYS_CLOSE-   Bit 1
+                	- SYS_READ -   Bit 2
+                	- SYS_WRITE-   Bit 3
+                	- SYS_RENAME-  Bit 4
+                	- SYS_RMDIR-   Bit 5
+                	- SYS_MKDIR-   Bit 6
+                	- SYS_LINK-    Bit 7
+                	- SYS_SYMLINK- Bit 8
+                	- SYS_UNLINK-  Bit 9
+
+                - Example:
+                        - choose 1 (to only enable OPEN System Call)
+                        - choose 3 (to only OPEN & CLOSE System Call)
+                        - choose 1023 (to enable all the above System Calls)
+
+
+         	- MODULE_NUMBER -> Specific Module Number
+                	- TRACE_MODULE      - 1
+                	- PROTECT_MODULE    - 2
+                	- ANTIVIRUS_MODULE  - 3
+
+	 	- Example:
+		
+			- ./user -s 4066 1023 1
+		This will register process with PID 4066 on module 1 with system vector
+		1023(All the above mentioned system calls will have enchanced functionality)
+
+[This feature already gets tested in the above steps 1 and 2, where we used ioctl set to assign a
+ vector to a process)
+
+5. new version of clone(2) to start with different syscall vector:
+		Other system calls like fork, vfork, original clone either provides a process 
+		with default system call vector or parent system call vector. This new 
+		system call would allow a process to have a new system call vector.
+
+	TESTING STEPS:		
+
+          - Please open 3 terminals to observe the behavior.
+
+          - Terminal 1 : This terminal is just used to keep a watch on the processes being
+                         forked and their corresponding PIDs.
+          - Terminal 2 : Here we would run the user program which calls the new clone
+                         system call.
+          - Terminal 3 : Here we would perform ioctl get for the created process and verify whether the 
+			 newly created child process is assigned the module as given by the user.
+
+
+         a. On terminal 1 : Run "top" command to see a list of processes.
+
+         b. On terminal 2:  Since the newclone user program is already compiled,
+                            Run user program newclone with 2 arguments: (Bitmap and Vector ID)
+                            This would fork a child process which would have default vector ID as
+			    given by the user
+
+                                ./newclone 1023 1
+
+                [Note:- the possible arguments for the newclone user program is as follows:
+                        ./newclone <VECTOR> <VECTOR_ID>
+
+                                VECTOR : system calls to allow, and
+                                VECTOR_ID : vector table(Module) to use.
+
+         c. On terminal 3: You can see a process created for newclone on terminal 1. Perform ioctl
+			   get after 40 secs and you will see that a process is using module 1 which
+			   was given by the user while running the user program. 
+			   Alternatviely, do lsmod to see the number of processes using module 1(trace module).
+                           It would change from 0 to 1 after the new clone system call is invoked.
+
+                                ./user -g
+	
+6. ioctl(2) support:list syscall vectors, vectors for PID, etc.:
+		This is provided using an ioctl get command. We maintain a global data 
+		structure(linked list) which keeps track of all the modules(vectors) 
+		loaded. Individual processes keeps a pointer to one of these vectors. 
+		We iterate through the global data structure and running processes 
+		and output the list of modules and the processes that use these 
+		modules. 
+
+ 		-HOW TO RUN GET_IOCTL:
+
+                        - ./user -g
+                        - Get IOCTL returns the Number of modules registered
+                          in the System, RC counts, PID and System Vector.
+
+	
+7. Useful examples of new syscall vectors(new, modified, overridden, disabled, etc).
+   Provide at least two syscall vectors other than default, with at least five syscalls 
+   each:
+		
+		We have implemented 3 new syscall vectors:
+
+		a. Trace module:It overrides 10 system calls and logs all the system calls 
+		   invoked by a process in a file. After logging the original system call 
+		   is invoked.
+
+			  TESTING:
+
+		          - Please open 3 terminals to observe the behavior.
+
+		          - Terminal 1 : This terminal is just used to keep a watch on the processes being
+                		         forked and their corresponding PIDs.
+		          - Terminal 2 : Here we would run the "test" user program which perform various operations like 
+					 open, rmdir, mkdir,..and so on.
+		          - Terminal 3 : Here we would set the ioctl for the created process and observe the behavior.
+
+	
+        		 a. On terminal 1 : Run "top" command to see a list of processes.
+
+		         b. On terminal 2:  Since the test user program is already compiled,
+        		                    Run user program test.
+	
+                        		        ./test
+
+		         c. On terminal 3: You can see a process created for test on terminal 1. Assign the
+		                           process, "module 1" which is trace module, using ioctl set, within 40 secs.
+					   (say process has PID 12486)
+
+						./user -s 12486 1023 1
+
+				            In the above e.g., We set the ioctl for process with ID 12486, 
+					    we provide bitmap as 1023 and make the process use module(vector ID) 1,
+					    which is trace module.
+
+		         d. On terminal 3: Do lsmod to see the number of processes using module 1(trace module).
+                 		           It would change from 0 to 1 after the ioctl is set. All the operations
+					   performed by the test program would be logged in a file stored at /tmp/trace_file.txt
+
+		
+		b. Protect module: It overrides open, rmdir, unlink, link, symlink, write and rename system
+				   calls. 
+			TESTING:
+				
+                          - Please open 3 terminals to observe the behavior.
+
+                          - Terminal 1 : This terminal is just used to keep a watch on the processes being
+                                         forked and their corresponding PIDs.
+                          - Terminal 2 : Here we would run the "test_protected" user program which perform various operations like
+                                         open, rmdir, mkdir,..and so on.
+                          - Terminal 3 : Here we would set the ioctl for the created process and observe the behavior.
+
+
+                         a. On terminal 1 : Run "top" command to see a list of processes.
+
+                         b. On terminal 2:  Since the "test_protected" user program is already compiled,
+                                            Run user program "test_protected".
+
+                                                ./test_protected
+
+                         c. On terminal 3: You can see a process created for test_protected on terminal 1. Assign the
+                                           process, "module 2" which is the protection module, using ioctl set, within 40 secs.
+                                           (say process has PID 12486)
+
+                                                ./user -s 12486 1023 2
+
+                                            In the above e.g., We set the ioctl for process with ID 12486,
+                                            we provide bitmap as 1023 and make the process use module(vector ID) 2,
+                                            which is protection module.
+
+                         d. On terminal 3: Do lsmod to see the number of processes using module 2(protection module).
+                                           It would change from 0 to 1 after the ioctl is set. Since the process is using
+					   module 2, the protection module would first check whether the file is protected 
+					   or not, if it is, then the operation on the file would not proceed. If it is not
+					   a protected file, the operation requested would be performed.
+
+
+		c. Antivirus module: It overrides open system call. In open system call, before 
+				     actually opening a file, we check whether the file is a virus 
+				     or not. If the file is found to be virus it does not allow to
+				     open the file. 
+
+			TESTING:
+	
+			- Please open 3 terminals to observe the behavior.
+
+                          - Terminal 1 : This terminal is just used to keep a watch on the processes being
+                                         forked and their corresponding PIDs.
+                          - Terminal 2 : Here we would run the "antivirusTest" user program which opens a virus file.
+                          - Terminal 3 : Here we would set the ioctl for the created process and observe the behavior.
+
+
+                         a. On terminal 1 : Run "top" command to see a list of processes.
+
+                         b. On terminal 2:  Since the "antivirusTest" user program is already compiled,
+                                            Run user program "antivirusTest". This program tries to open
+					    a virus file.
+
+                                                ./antivirusTest
+
+                         c. On terminal 3: You can see a process created for "antivirusTest" on terminal 1. Assign the
+                                           process, "module 3" which is the antivirus module, using ioctl set, within 40 secs.
+                                           (say process has PID 12486)
+
+                                                ./user -s 12486 1023 3
+
+                                            In the above e.g., We set the ioctl for process with ID 12486,
+                                            we provide bitmap as 1023 and make the process use module(vector ID) 3,
+                                            which is antivirus module.
+
+                         d. On terminal 3: Do lsmod to see the number of processes using module 3(antivirus module).
+                                           It would change from 0 to 1 after the ioctl is set. Since the process is using
+                                           module 3, the antivirus module first checks whether the file is virus or not.
+					   The user program opens file "/tmp/antivirus_test.txt" which contains virus patterns.
+					   Virus patterns are inside "/tmp/blacklist". Check dmesg, you will find that file was
+					   categorized as virus and it won't allow to open it.
+			
+			
+	[Modify the file "/tmp/antivirus_test.txt" to remove character "Z" from the file. This would make sure that the 
+	 file is no more a virus as pattern would not be found in it. Again repeat the above operation and check dmesg, 
+	 you will see the message that file is not virus]
+
+
+
+8. User - level code:
+		We have implemented various user level programs:
+		a.User program [newclone.c] to call the new clone system call.
+		b.User program [org_clone.c] to call the original clone system call with flag as an 
+		argument.
+		c.User program [call_fork.c] to test a feature of assigning a child process with its 
+		parent's system call vector on creation.
+		d. User level [test.c & test_protected.c] code to verify the functionality of all 
+		the modules and to verify the dynamic changing of system vector and modules.
+		e. User level [user_ioctl.c] IOCTL code to dynamically change the system vector 
+		and vector id.
+	
+
+Design:
+		
+		Driver module: This module is responsible for hijacking the system call table. 
+		Some of the system calls hijacked are: OPEN, CLOSE, READ, WRITE, UNLINK, LINK, 
+		RMDIR, SYMLINK, RENAME, MKDIR, Once the module is initialized, the system call 
+		address is retrieved from the kernel and it is changed from read only to read 
+		write in order to intercept it. Then, the original address of the various 
+		system calls are preserved and replaced with our new intercepted system call 
+		implementations. For each of these system calls, we first call our custom 
+		implementation. Based on the result of our custom implementation we either 
+		call original system call or don’t call it.
+		
+		1.	Trace module: This module is responsible to trace all the system calls. 
+			It stores all the data in a log file. This is useful as it can be used 
+			to track down the sequence of system calls called during any failure. 
+			Log files are useful to analyze behavior of user as well.
+	
+		2.	Protection module: This module is responsible to hijack various system 
+			calls open, rmdir, unlink, link, symlink, write and rename. The overriden
+			functionalities firt check whether the file is protected or not, if it is 
+			protected then it does not allow it to perform original system calls.
+
+		3. 	Antivirus module: This module is responsible to hijack the open 
+			system call and first scan a file for virus. If the file is found to 
+			be a virus, it does not allow opening the file. The scan function
+			returns a negative value which signifies that we don’t have to call 
+			the original open system call.
+
+		      
+        - IOCTL KERNEL CODE
+
+        	- IOCTL is implemented as a loadable module. This is done to be able to 
+		  intercept all the IOCTL calls. This enables us to issue ioctl(2) command 
+		  to register the process on specific modules with specific permissions. 
+		  In kernel this is implemented by finding the process task struct from 
+		  the proces PID which is sent to KERNEL code from user land. Upon 
+		  receiving the SET_IOCTL, module linked list is updated with RC count 
+		  and requested System Vector is set to the task struct of the process.
+	
+		- Single process can be registerd only on a single module at a time, So 
+		  if a module is already registered on a module and SET_IOCTL dictates 
+		  to register it on a different module then RC count for the former is 
+		  decremented and incremented for later. 
+
+		- For GET_IOCTL all the running processes are checked and a string 
+		  containing module number, RC count of each module and dependent 
+		  processes PIC and System Vactor is returned.
+	  
+
+EXTRA CREDIT
+       1. Implemented an antivirus module other than 2 usual modules. This module hooks 
+	  an open system call. It first checks whether a file which is being opened 
+	  is a virus file or not. If found to be virus, we dont allow it to be opened.
+	  If its not a virus, we call the original OPEN system call which opens the 
+	  file and returns fd as usual. To check whether a file is a virus, we use 
+	  blacklist patterns, which if present in the file, we categorize the file
+	  as virus. The size of blacklist file and the file to be scanned can be 
+	  huge as we searched blacklist patterns in file on a PAGE_SIZE basis. Since, 
+	  we do not load the entire blacklist file or file to be scanned in memory 
+	  at once, their sizes can be really huge.
+	  
+	  TESTING:
+		1. Run user program - test_antivirus
+		2. Set ioctl for that process with system vector id 3. This is the vector id for antivirus module.
+		3. 
+		
+		test_antivirus tries to open a file "testfile" which is present in HW3 directory.
+
+       2. We have handled the case where a process is forked even using fork, vfork system calls. 
+	  In that case, we set the child's system vector same as its parent.
+
+REFERENCES 
+
+	http:	//man7.org/linux/man-pages/man2/clone.2.html
